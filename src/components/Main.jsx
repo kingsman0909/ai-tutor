@@ -9,145 +9,81 @@ const Main = () => {
     const [loading, setLoading] = useState(false);
     const [speaking, setSpeaking] = useState(false);
     const [error, setError] = useState('');
+    const [audioUrl, setAudioUrl] = useState('');
 
     const recorderRef = useRef(null);
     const streamRef = useRef(null);
     const chunksRef = useRef([]);
-    const voicesRef = useRef([]);
+    const audioRef = useRef(null);
     const mountedRef = useRef(true);
 
-    // Clean AI response before speaking
-    const cleanText = (text) => {
-        return text
-            .replace(/```[\s\S]*?```/g, '')
-            .replace(/#{1,6}\s?/g, '')
-            .replace(/\*\*(.*?)\*\*/g, '$1')
-            .replace(/\*(.*?)\*/g, '$1')
-            .replace(/__(.*?)__/g, '$1')
-            .replace(/_(.*?)_/g, '$1')
-            .replace(/`(.*?)`/g, '$1')
-            .replace(/^\s*[-*]\s+/gm, '')
-            .replace(/^\s*\d+\.\s+/gm, '')
-            .trim();
-    };
-
-    // Load available system voices
+    // Automatically play Cartesia-generated audio
     useEffect(() => {
-        mountedRef.current = true;
+        if (!audioUrl || !audioRef.current) return;
 
-        if (!('speechSynthesis' in window)) {
-            return;
-        }
-
-        const synth = window.speechSynthesis;
-
-        const loadVoices = () => {
-            voicesRef.current = synth.getVoices();
-
-            console.log(
-                'Available voices:',
-                voicesRef.current.map(voice => ({
-                    name: voice.name,
-                    lang: voice.lang
-                }))
-            );
+        const playAudio = async () => {
+            try {
+                await audioRef.current.play();
+                setError('');
+            } catch (err) {
+                console.warn('Autoplay blocked:', err);
+                setError('Tap Play Educato Voice to hear the response.');
+            }
         };
 
-        loadVoices();
+        playAudio();
+    }, [audioUrl]);
 
-        synth.addEventListener('voiceschanged', loadVoices);
+    // Cleanup on component unmount
+    useEffect(() => {
+        mountedRef.current = true;
 
         return () => {
             mountedRef.current = false;
 
-            synth.removeEventListener('voiceschanged', loadVoices);
-            synth.cancel();
+            if (audioRef.current) {
+                audioRef.current.pause();
+                audioRef.current.src = '';
+            }
+
+            if (audioUrl) {
+                URL.revokeObjectURL(audioUrl);
+            }
 
             streamRef.current?.getTracks().forEach(track => {
                 track.stop();
             });
         };
-    }, []);
+    }, [audioUrl]);
 
-    // Select the best available voice
-    const getBestVoice = () => {
-        const voices = voicesRef.current;
-
-        return (
-            voices.find(v => v.lang.toLowerCase() === 'fil-ph') ||
-            voices.find(v => v.lang.toLowerCase().startsWith('fil')) ||
-            voices.find(v => v.lang.toLowerCase() === 'en-ph') ||
-            voices.find(v => v.lang.toLowerCase().startsWith('en-us')) ||
-            voices.find(v => v.lang.toLowerCase().startsWith('en'))
-        );
-    };
-
-    // Stop Educato voice
+    // Stop Cartesia audio
     const stopSpeaking = () => {
-        if ('speechSynthesis' in window) {
-            window.speechSynthesis.cancel();
+        if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
         }
 
         setSpeaking(false);
     };
 
-    // Speak AI response
-    const speakReply = (text) => {
-        if (!text || !text.trim()) return;
+    // Manually play Cartesia audio
+    const playEducatoVoice = async () => {
+        if (!audioRef.current || !audioUrl) return;
 
-        if (!('speechSynthesis' in window)) {
-            setError('Your browser does not support text-to-speech.');
-            return;
-        }
-
-        const synth = window.speechSynthesis;
-
-        synth.cancel();
-
-        const cleanedText = cleanText(text);
-
-        const utterance = new SpeechSynthesisUtterance(cleanedText);
-
-        const voice = getBestVoice();
-
-        if (voice) {
-            utterance.voice = voice;
-            utterance.lang = voice.lang;
-        } else {
-            utterance.lang = 'en-US';
-        }
-
-        utterance.rate = 0.95;
-        utterance.pitch = 0.95;
-        utterance.volume = 1;
-
-        utterance.onstart = () => {
-            setSpeaking(true);
+        try {
+            audioRef.current.currentTime = 0;
+            await audioRef.current.play();
             setError('');
-        };
-
-        utterance.onend = () => {
-            setSpeaking(false);
-        };
-
-        utterance.onerror = (event) => {
-            console.error('Speech Error:', event.error);
-
-            setSpeaking(false);
-
-            if (event.error !== 'canceled' && event.error !== 'interrupted') {
-                setError('Unable to play Educato voice. Try pressing the speaker button.');
-            }
-        };
-
-        synth.speak(utterance);
+        } catch (err) {
+            console.error('Audio Playback Error:', err);
+            setError('Unable to play Educato voice. Please try again.');
+        }
     };
 
     // Record microphone
     const handleSpeak = async () => {
         if (listening) {
             recorderRef.current?.stop();
-            setListening(false);
             return;
         }
 
@@ -158,12 +94,21 @@ const Main = () => {
 
             stopSpeaking();
 
+            if (audioUrl) {
+                URL.revokeObjectURL(audioUrl);
+                setAudioUrl('');
+            }
+
             if (!navigator.mediaDevices?.getUserMedia) {
-                throw new Error('Microphone is not supported by this browser.');
+                throw new Error(
+                    'Microphone is not supported by this browser.'
+                );
             }
 
             if (!window.MediaRecorder) {
-                throw new Error('Audio recording is not supported by this browser.');
+                throw new Error(
+                    'Audio recording is not supported by this browser.'
+                );
             }
 
             const stream = await navigator.mediaDevices.getUserMedia({
@@ -204,6 +149,9 @@ const Main = () => {
                 stream.getTracks().forEach(track => track.stop());
 
                 streamRef.current = null;
+
+                if (!mountedRef.current) return;
+
                 setListening(false);
 
                 if (!audioBlob.size) {
@@ -220,24 +168,42 @@ const Main = () => {
                 stream.getTracks().forEach(track => track.stop());
 
                 streamRef.current = null;
-                setListening(false);
 
+                setListening(false);
                 setError('Audio recording failed.');
             };
 
             recorder.start();
-
             setListening(true);
 
         } catch (err) {
             console.error('Microphone Error:', err);
 
-            streamRef.current?.getTracks().forEach(track => track.stop());
+            streamRef.current?.getTracks().forEach(track => {
+                track.stop();
+            });
+
             streamRef.current = null;
 
             setListening(false);
             setError(err.message || 'Microphone access failed.');
         }
+    };
+
+    // Convert Base64 audio into an MP3 Blob URL
+    const createAudioUrl = (base64Audio, mimeType = 'audio/mpeg') => {
+        const binary = atob(base64Audio);
+        const bytes = new Uint8Array(binary.length);
+
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+
+        const blob = new Blob([bytes], {
+            type: mimeType
+        });
+
+        return URL.createObjectURL(blob);
     };
 
     // Send recorded audio to backend
@@ -250,7 +216,9 @@ const Main = () => {
 
             const extension = audioBlob.type.includes('mp4')
                 ? 'mp4'
-                : 'webm';
+                : audioBlob.type.includes('ogg')
+                    ? 'ogg'
+                    : 'webm';
 
             formData.append(
                 'audio',
@@ -271,24 +239,60 @@ const Main = () => {
             const result = await response.json();
 
             if (!response.ok || !result.success) {
-                throw new Error(result.message || 'AI failed.');
+                throw new Error(
+                    result.message || 'Educato failed to respond.'
+                );
             }
 
-            const answer = result.data.reply;
+            const data = result.data;
 
-            setTranscript(result.data.transcript);
-            setReply(answer);
+            if (!data.reply) {
+                throw new Error('Educato returned an empty response.');
+            }
 
-            // Attempt automatic speech playback
-            speakReply(answer);
+            if (!data.audio) {
+                throw new Error(
+                    'Cartesia did not return generated audio.'
+                );
+            }
+
+            setTranscript(data.transcript);
+            setReply(data.reply);
+
+            // Stop previous audio
+            if (audioRef.current) {
+                audioRef.current.pause();
+                audioRef.current.currentTime = 0;
+            }
+
+            // Create audio from Cartesia response
+            const newAudioUrl = createAudioUrl(
+                data.audio,
+                data.audioMimeType || 'audio/mpeg'
+            );
+
+            setAudioUrl(previousUrl => {
+                if (previousUrl) {
+                    URL.revokeObjectURL(previousUrl);
+                }
+
+                return newAudioUrl;
+            });
+
+            console.log('Transcription Provider:', data.transcriptionProvider);
+            console.log('TTS Provider:', data.ttsProvider);
 
         } catch (err) {
             console.error('AI Error:', err);
 
-            setError(err.message || 'Failed to connect to Educato.');
+            setError(
+                err.message || 'Failed to connect to Educato.'
+            );
 
         } finally {
-            setLoading(false);
+            if (mountedRef.current) {
+                setLoading(false);
+            }
         }
     };
 
@@ -300,12 +304,14 @@ const Main = () => {
                 <header className="educato-header">
 
                     <div className="educato-brand">
+
                         <div className="brand-icon">E</div>
 
                         <div>
-                            <h1>Educato</h1>
+                            <h1>AI Tutor</h1>
                             <p>Your AI-powered learning assistant</p>
                         </div>
+
                     </div>
 
                     <div className="connection-status">
@@ -354,7 +360,9 @@ const Main = () => {
 
                             <div>
                                 <h3>AI Tutor</h3>
-                                <span>AI-generated response</span>
+                                <span>
+                                    AI-generated response
+                                </span>
                             </div>
 
                         </div>
@@ -376,14 +384,14 @@ const Main = () => {
 
                         </div>
 
-                        {/* Speaker Controls */}
+                        {/* Cartesia Audio Controls */}
 
-                        {reply && (
+                        {reply && audioUrl && (
                             <div className="speaker-controls">
 
                                 <button
                                     className="speaker-button"
-                                    onClick={() => speakReply(reply)}
+                                    onClick={playEducatoVoice}
                                     disabled={speaking || loading}
                                 >
                                     🔊 Play Educato Voice
@@ -397,6 +405,33 @@ const Main = () => {
                                         ■ Stop Educato
                                     </button>
                                 )}
+
+                                <audio
+                                    ref={audioRef}
+                                    src={audioUrl}
+                                    preload="auto"
+                                    playsInline
+                                    onPlay={() => {
+                                        setSpeaking(true);
+                                        setError('');
+                                    }}
+                                    onEnded={() => {
+                                        setSpeaking(false);
+                                    }}
+                                    onPause={() => {
+                                        setSpeaking(false);
+                                    }}
+                                    onError={() => {
+                                        setSpeaking(false);
+                                        setError(
+                                            'Unable to load Cartesia audio.'
+                                        );
+                                    }}
+                                />
+
+                                <p className="audio-provider">
+                                    Powered by Cartesia TTS
+                                </p>
 
                             </div>
                         )}
@@ -429,7 +464,9 @@ const Main = () => {
                         )}
 
                         {loading && (
-                            <p>AI is thinking...</p>
+                            <p>
+                                Educato is thinking and generating voice...
+                            </p>
                         )}
 
                         {error && (
