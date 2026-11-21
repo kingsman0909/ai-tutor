@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import '../styles/main.css';
 
-const API_URL = 'http://localhost:8000/api/speech/chat';
+const API_URL = 'https://ai-tutor-2mff.onrender.com/api/speech/chat';
 
 const Main = () => {
     const [transcript, setTranscript] = useState('');
