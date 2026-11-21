@@ -147,7 +147,7 @@ const Main = () => {
             formData.append('history', JSON.stringify([]));
 
             const response = await fetch(
-                'http://localhost:8000/api/speech/chat',
+                'https://ai-tutor-2mff.onrender.com/api/speech/chat',
                 {
                     method: 'POST',
                     body: formData

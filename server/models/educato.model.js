@@ -6,12 +6,14 @@ class EducatoModel {
 
     static async chat(message, history = []) {
 
+        const recentHistory = history.slice(-10);
+
         const messages = [
             {
                 role: 'system',
                 content: EDUCATO_PROMPT
             },
-            ...history,
+            ...recentHistory,
             {
                 role: 'user',
                 content: message
