@@ -19,9 +19,10 @@ const Main = () => {
     const audioContextRef = useRef(null);
     const sourceRef = useRef(null);
     const mountedRef = useRef(true);
+    const cancelledRef = useRef(false);
 
     // ==========================================
-    // AUDIO UNLOCK - IMPORTANT FOR IPHONE SAFARI
+    // AUDIO UNLOCK - IPHONE SAFARI SUPPORT
     // ==========================================
 
     const unlockAudio = async () => {
@@ -42,7 +43,6 @@ const Main = () => {
             await context.resume();
         }
 
-        // Silent audio to initialize playback on iOS
         const buffer = context.createBuffer(
             1,
             1,
@@ -154,17 +154,56 @@ const Main = () => {
     };
 
     // ==========================================
+    // CANCEL RECORDING
+    // NO API REQUEST WILL BE SENT
+    // ==========================================
+
+    const cancelRecording = () => {
+        if (!recorderRef.current) return;
+
+        console.log('Cancelling recording...');
+
+        // Mark as cancelled BEFORE stopping recorder
+        cancelledRef.current = true;
+
+        // Discard all recorded chunks
+        chunksRef.current = [];
+
+        // Stop recording
+        if (recorderRef.current.state === 'recording') {
+            recorderRef.current.stop();
+        }
+
+        // Immediately release microphone
+        streamRef.current?.getTracks().forEach(track => {
+            track.stop();
+        });
+
+        streamRef.current = null;
+
+        setListening(false);
+        setError('Recording cancelled. No API request was sent.');
+
+        console.log('Recording cancelled. API request skipped.');
+    };
+
+    // ==========================================
     // RECORD MICROPHONE
     // ==========================================
 
     const handleSpeak = async () => {
-        // Stop recording when button is clicked again
+        // Stop recording and SEND to API
         if (listening) {
-            recorderRef.current?.stop();
+            if (recorderRef.current?.state === 'recording') {
+                recorderRef.current.stop();
+            }
+
             return;
         }
 
         try {
+            cancelledRef.current = false;
+
             setError('');
             setTranscript('');
             setReply('');
@@ -172,7 +211,7 @@ const Main = () => {
 
             stopSpeaking();
 
-            // Unlock audio while the user is interacting
+            // Unlock audio during user interaction
             await unlockAudio();
 
             if (!navigator.mediaDevices?.getUserMedia) {
@@ -190,6 +229,12 @@ const Main = () => {
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: true
             });
+
+            // Check if component was unmounted
+            if (!mountedRef.current) {
+                stream.getTracks().forEach(track => track.stop());
+                return;
+            }
 
             streamRef.current = stream;
             chunksRef.current = [];
@@ -211,32 +256,59 @@ const Main = () => {
 
             recorderRef.current = recorder;
 
+            // Collect recorded audio
             recorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
+                if (
+                    !cancelledRef.current &&
+                    event.data.size > 0
+                ) {
                     chunksRef.current.push(event.data);
                 }
             };
 
-            recorder.onstop = async () => {
-                const audioBlob = new Blob(chunksRef.current, {
-                    type: recorder.mimeType || 'audio/mp4'
-                });
+            // ==================================
+            // RECORDER STOP EVENT
+            // ==================================
 
+            recorder.onstop = async () => {
+                // Always release microphone
                 stream.getTracks().forEach(track => {
                     track.stop();
                 });
 
-                streamRef.current = null;
+                if (streamRef.current === stream) {
+                    streamRef.current = null;
+                }
 
                 if (!mountedRef.current) return;
 
                 setListening(false);
+
+                // IMPORTANT:
+                // If cancelled, NEVER call sendAudio()
+                if (cancelledRef.current) {
+                    chunksRef.current = [];
+
+                    console.log(
+                        'Recording discarded. No API request sent.'
+                    );
+
+                    return;
+                }
+
+                // Build audio blob only for valid recordings
+                const audioBlob = new Blob(chunksRef.current, {
+                    type: recorder.mimeType || 'audio/mp4'
+                });
+
+                chunksRef.current = [];
 
                 if (!audioBlob.size) {
                     setError('No audio recorded. Please try again.');
                     return;
                 }
 
+                // Only normal Stop Recording reaches here
                 await sendAudio(audioBlob);
             };
 
@@ -247,7 +319,11 @@ const Main = () => {
                     track.stop();
                 });
 
-                streamRef.current = null;
+                if (streamRef.current === stream) {
+                    streamRef.current = null;
+                }
+
+                chunksRef.current = [];
 
                 setListening(false);
                 setError('Audio recording failed.');
@@ -256,6 +332,8 @@ const Main = () => {
             recorder.start();
 
             setListening(true);
+
+            console.log('Recording started.');
 
         } catch (err) {
             console.error('Microphone Error:', err);
@@ -298,6 +376,8 @@ const Main = () => {
             );
 
             formData.append('history', JSON.stringify([]));
+
+            console.log('Sending recording to Educato API...');
 
             const response = await fetch(API_URL, {
                 method: 'POST',
@@ -343,7 +423,7 @@ const Main = () => {
 
             console.log('Cartesia audio received.');
 
-            // Automatically play the generated response
+            // Automatically play generated response
             await playEducatoVoice(data.audio);
 
         } catch (err) {
@@ -371,6 +451,10 @@ const Main = () => {
 
         return () => {
             mountedRef.current = false;
+
+            // Prevent accidental API request during unmount
+            cancelledRef.current = true;
+            chunksRef.current = [];
 
             if (sourceRef.current) {
                 try {
@@ -534,6 +618,17 @@ const Main = () => {
                             ? '■ Stop Recording'
                             : '🎙 Start Speaking'}
                     </button>
+
+                    {/* CANCEL RECORDING BUTTON */}
+
+                    {listening && (
+                        <button
+                            className="cancel-button"
+                            onClick={cancelRecording}
+                        >
+                            ✕ Cancel Recording
+                        </button>
+                    )}
 
                     <div className="activity-status">
 
