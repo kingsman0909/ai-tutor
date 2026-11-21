@@ -24,7 +24,7 @@ class EducatoModel {
             model: 'openai/gpt-oss-120b',
             messages,
             temperature: 0.8,
-            max_tokens: 100
+            max_tokens: 500
         });
 
         return response.choices[0].message.content;
